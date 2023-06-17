@@ -22,6 +22,15 @@ DemoAudioProcessor::DemoAudioProcessor()
                        )
 #endif
 {
+    attack = dynamic_cast<juce::AudioParameterFloat*>(apvts.getParameter("Attack"));
+    jassert(attack != nullptr);
+    release = dynamic_cast<juce::AudioParameterFloat*>(apvts.getParameter("Release"));
+    jassert(release != nullptr);
+    threshold = dynamic_cast<juce::AudioParameterFloat*>(apvts.getParameter("Threshold"));
+    jassert(threshold != nullptr);
+
+    ratio = dynamic_cast<juce::AudioParameterChoice*>(apvts.getParameter("ratio"));
+    jassert(ratio != nullptr);
 }
 
 DemoAudioProcessor::~DemoAudioProcessor()
@@ -95,6 +104,12 @@ void DemoAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     // Use this method as the place to do any pre-playback
     // initialisation that you need..
+    juce::dsp::ProcessSpec spec;
+    spec.maximumBlockSize = samplesPerBlock;
+    spec.numChannels = getTotalNumOutputChannels();
+    spec.sampleRate = sampleRate;
+
+    Compressor.prepare(spec);
 }
 
 void DemoAudioProcessor::releaseResources()
@@ -144,18 +159,19 @@ void DemoAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
-    {
-        auto* channelData = buffer.getWritePointer (channel);
+    Compressor.setAttack(apvts.getRawParameterValue("Attack")->load());
+    Compressor.setRelease(apvts.getRawParameterValue("Release")->load());
+    Compressor.setThreshold(apvts.getRawParameterValue("Threshold")->load());
 
-        // ..do something to the data...
-    }
+    int ratioIndex = apvts.getRawParameterValue("Ratio")->load();
+    double ratio = choices[ratioIndex];
+
+    Compressor.setRatio(ratio);
+
+    auto audioBlock = juce::dsp::AudioBlock<float>(buffer);
+    auto context = juce::dsp::ProcessContextReplacing<float>(audioBlock);
+
+    Compressor.process(context);
 }
 
 //==============================================================================
@@ -166,7 +182,8 @@ bool DemoAudioProcessor::hasEditor() const
 
 juce::AudioProcessorEditor* DemoAudioProcessor::createEditor()
 {
-    return new DemoAudioProcessorEditor (*this);
+    //return new DemoAudioProcessorEditor (*this);
+    return new juce::GenericAudioProcessorEditor(*this);
 }
 
 //==============================================================================
@@ -175,13 +192,55 @@ void DemoAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     // You should use this method to store your parameters in the memory block.
     // You could do that either as raw data, or use the XML or ValueTree classes
     // as intermediaries to make it easy to save and load complex data.
+    juce::MemoryOutputStream memoryOutStream(destData, true);
+    apvts.state.writeToStream(memoryOutStream);
 }
 
 void DemoAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     // You should use this method to restore your parameters from this memory block,
     // whose contents will have been created by the getStateInformation() call.
+
+    auto valueTree = juce::ValueTree::readFromData(data, sizeInBytes);
+    if(valueTree.isValid())
+    {
+        apvts.replaceState(valueTree);
+    }
 }
+
+juce::AudioProcessorValueTreeState::ParameterLayout DemoAudioProcessor::createParameterlist()
+{
+    APTVS::ParameterLayout layout;
+
+    using namespace juce;
+
+    layout.add(std::make_unique<AudioParameterFloat>("Threshold",
+													 "Threshold", 
+													 NormalisableRange<float>(-60, 12, 1, 1), 
+													 0));
+
+    auto attackReleaseRange = NormalisableRange<float>(5, 500, 1, 1);
+
+    layout.add(std::make_unique<AudioParameterFloat>("Attack", 
+													"Attack", 
+													attackReleaseRange, 
+													50));
+    layout.add(std::make_unique<AudioParameterFloat>("Release",
+													"Release",
+													attackReleaseRange,
+													200));
+
+   
+
+    layout.add(std::make_unique<AudioParameterInt>("Ratio", 
+													"Ratio",
+                                                    0,
+													choices.size() -1,
+													4));
+
+    return layout;
+}
+
 
 //==============================================================================
 // This creates new instances of the plugin..
